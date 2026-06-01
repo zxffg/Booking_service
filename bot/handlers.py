@@ -2,17 +2,26 @@ from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery, ErrorEvent
 
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 
 from datetime import datetime
 
 from db.repository import (check_user, get_user_id, create_user, 
-                           get_available_rooms)
+                           get_available_rooms, cancel_booking, 
+                           get_user_bookings_history, confirm_booking,
+                           get_booking_dates, get_booking_status)
 
-from bot.keyboards import start_keyboard, request_contact
+from bot.keyboards import (start_keyboard, request_contact, delete_keyboard)
 
 from services.booking_service import create_booking_flow
+
+import asyncio
+
+from services.redis_service import (set_booking_cache, delete_booking_cache, 
+                                    acquire_lock, release_lock)
 
 router = Router()
 
@@ -56,6 +65,13 @@ async def add_new_user(message: Message, state: FSMContext):
     await state.clear()
 
 #! Создание брони
+async def auto_cancel(booking_id: int, room_id: int) -> None:
+    await asyncio.sleep(600)
+    status = await get_booking_status(booking_id, room_id)
+    if status == 'pending':
+        await cancel_booking(booking_id)
+        await delete_booking_cache(room_id)
+
 class CreateNewBooking(StatesGroup):
     wait_check_in = State()
     wait_check_out = State()
@@ -124,7 +140,67 @@ async def get_room_id(message: Message, state: FSMContext):
     check_in = data['check_in']
     check_out = data['check_out']
     room_id = data['room_id']
-    await create_booking_flow(user_id, room_id, check_in, check_out)
+    booking_id = await create_booking_flow(user_id, room_id, check_in, check_out)
 
-    await message.answer(text="✅ Ваша бронь успешно создана! Нажав на '📋 Текущие брони' вы можете ознакомится с ней подробнее.")
+    # Кнопка оплачено
+    success_button = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Оплачено", callback_data=f"paid:{booking_id}")]])
+
+    asyncio.create_task(auto_cancel(booking_id, room_id))
+    await acquire_lock(room_id)
+
+    await message.answer(text="✅ Ваша бронь успешно создана! Нажав на '📋 Текущие брони' вы можете ознакомится с ней подробнее.\n\nДля оплаты и подтверждения брони, перейдите по ссылке ниже.", reply_markup=success_button)
     await state.clear()
+# Смена статуса на подтверждено
+@router.callback_query(F.data.startswith("paid:"))
+async def change_status(callback: CallbackQuery):
+    booking_id = callback.data.split(":")[1]
+    await confirm_booking(int(booking_id))
+
+    data = await get_booking_dates(booking_id)
+    row = data[0]
+    room_id = row[1]
+    dates = str(row[0]).strip("[)").split(",")
+    # check_in = datetime.strptime(dates[0].strip(), "%Y-%m-%d").strftime("%d.%m.%Y")
+    # check_out = datetime.strptime(dates[1].strip(), "%Y-%m-%d").strftime("%d.%m.%Y")
+    check_in = dates[0].strip()
+    check_out = dates[1].strip()
+
+    await set_booking_cache(room_id, check_in, check_out)
+    await callback.message.edit_text(text="✅ Бронирование успешно создано! Спасибо за оплату, ждем вас!", reply_markup=None)
+    await release_lock(room_id)
+    await callback.answer()
+
+#! Удаление записи
+@router.message(F.text == '➖ Удалить бронь')
+async def delete(message: Message):
+    user_id = await get_user_id(message.from_user.username)
+    inline_kb = await delete_keyboard(user_id)
+    await message.answer(text="💁🏻 Здесь вы можете выбрать одну из пяти последних записей, чтобы удалить её:", reply_markup=inline_kb)
+
+@router.callback_query(F.data.startswith("del:"))
+async def delete_booking(callback: CallbackQuery):
+    id = callback.data.split(":")[1]
+    await cancel_booking(int(id))
+    await callback.message.edit_text(text="✅ Успешно удалено бронирование.", reply_markup=None)
+    await callback.answer()
+
+#! История бронирования
+@router.message(F.text == '📋 Текущие брони')
+async def bookings_right_now(message: Message):
+    user_id = await get_user_id(message.from_user.username)
+    data = await get_user_bookings_history(user_id)
+    text = ""
+    text += "🛠️ Ваша история бронирования.\n"
+    for row in data:
+        accommodation = str(row[3])
+        accommodation = accommodation.strip("[)]").split(",")
+        check_in = datetime.strptime(accommodation[0].strip(), "%Y-%m-%d").strftime("%d.%m.%Y")
+        check_out = datetime.strptime(accommodation[1].strip(), "%Y-%m-%d").strftime("%d.%m.%Y")
+        text += (
+            f"📋 <b>Бронь #{row[0]}</b>\n"
+            f"🏠 ID номера: {row[2]}\n"
+            f"📅 Даты: c {check_in} по {check_out}\n"
+            f"🔖 Статус: {row[4]}\n"
+            f"➖➖➖➖➖➖➖➖➖\n"
+        )
+    await message.answer(text=text, parse_mode="HTML")

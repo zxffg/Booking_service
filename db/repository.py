@@ -53,12 +53,49 @@ async def get_available_rooms(check_in: str, check_out: str) -> list:
             raise e
         
 # Создание брони
-async def create_booking(user_id: int, room_id: int, check_in: str, check_out: str) -> None:
+async def create_booking(user_id: int, room_id: int, check_in: str, check_out: str) -> int:
     async with (await get_pool()).connection() as conn:
         try:
             async with conn.cursor() as cur:
-                await cur.execute("INSERT INTO bookings(user_id, room_id, accommodation) VALUES(%s, %s, DATERANGE(%s, %s));", 
+                result = await cur.execute("INSERT INTO bookings(user_id, room_id, accommodation) VALUES(%s, %s, DATERANGE(%s, %s)) RETURNING id;", 
                                   [user_id, room_id, check_in, check_out])
+                await conn.commit()
+                result = await cur.fetchone()
+                return result[0]
+        except psycopg.Error as e:
+            await conn.rollback()
+            raise e
+
+# Получение дат
+async def get_booking_dates(id: int) -> list:
+    async with (await get_pool()).connection() as conn:
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT accommodation, room_id FROM bookings WHERE id = %s", [id])
+                result = await cur.fetchall()
+                return result
+        except psycopg.Error as e:
+            await conn.rollback()
+            raise e
+
+# Получение статуса брони
+async def get_booking_status(booking_id: int, room_id: int) -> list:
+    async with (await get_pool()).connection() as conn:
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT status FROM bookings WHERE id = %s and room_id = %s", [booking_id, room_id])
+                result = await cur.fetchone()
+                return result[0]
+        except psycopg.Error as e:
+            await conn.rollback()
+            raise e
+
+# Подтверждение брони
+async def confirm_booking(id: int) -> None:
+    async with (await get_pool()).connection() as conn:
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("UPDATE bookings SET status = 'confirmed' WHERE id = %s", [id])
                 await conn.commit()
         except psycopg.Error as e:
             await conn.rollback()
@@ -66,6 +103,18 @@ async def create_booking(user_id: int, room_id: int, check_in: str, check_out: s
         
 # Просмотр броней пользователя
 async def get_user_bookings(user_id: int) -> list:
+    async with (await get_pool()).connection() as conn:
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT * FROM bookings WHERE user_id = %s and status != 'canceled' ORDER BY id DESC LIMIT 5;", [user_id])
+                result = await cur.fetchall()
+                return result
+        except psycopg.Error as e:
+            await conn.rollback()
+            raise e
+
+# Просмотр истории броней пользователя
+async def get_user_bookings_history(user_id: int) -> list:
     async with (await get_pool()).connection() as conn:
         try:
             async with conn.cursor() as cur:

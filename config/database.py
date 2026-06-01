@@ -28,7 +28,7 @@ async def get_pool():
         await init_pool()
         return pool
 
-# ~ Redis клиент
+# * Redis клиент
 client = None
 RD_HOST = os.getenv('RD_HOST')
 RD_PORT = os.getenv('RD_PORT')

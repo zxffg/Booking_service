@@ -2,3 +2,4 @@
 .DS_Store
 .VS_code
 .venv/
+test_db_redis.py

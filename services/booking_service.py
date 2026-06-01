@@ -37,10 +37,9 @@ async def create_booking_flow(user_id: int, room_id: int, check_in: str, check_o
         if await check_overlap(room_id, check_in, check_out):
             raise TimeOverlapException
         
-        await create_booking(user_id, room_id, check_in, check_out)
+        booking_id = await create_booking(user_id, room_id, check_in, check_out)
         
-        if not await set_booking_cache(room_id, check_in, check_out):
-            raise CacheException
+        return booking_id
     except Exception as e:
         raise e
     finally:

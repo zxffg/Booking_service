@@ -49,4 +49,3 @@ async def is_room_locked(room_id: int) -> bool:
         return bool(booking or lock)
     except Exception as e:
         raise e
-        
