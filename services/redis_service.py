@@ -25,7 +25,7 @@ async def release_lock(room_id: int) -> bool:
 async def set_booking_cache(room_id: int, check_in: str, check_out: str) -> bool:
     try:
         client = await get_redis()
-        seconds = (datetime.strftime(check_out, "%Y-%m-%d") - datetime.strftime(check_in, "%Y-%m-%d")).total_seconds()
+        seconds = (datetime.strptime(check_out, "%Y-%m-%d") - datetime.strptime(check_in, "%Y-%m-%d")).total_seconds()
         result = await client.set(f"booking:room:{room_id}", "booked", nx=True, ex=int(seconds))
         return result is not None
     except Exception as e:
@@ -44,6 +44,9 @@ async def delete_booking_cache(room_id: int) -> bool:
 async def is_room_locked(room_id: int) -> bool:
     try:
         client = await get_redis()
-        return bool((await client.exists(f"booking:room:{room_id}")) or (client.exists(f"lock:room:{room_id}")))
+        booking = await client.exists(f"booking:room:{room_id}")
+        lock = await client.exists(f"lock:room:{room_id}")
+        return bool(booking or lock)
     except Exception as e:
         raise e
+        
